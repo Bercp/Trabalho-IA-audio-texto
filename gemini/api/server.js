@@ -1,15 +1,23 @@
-// server.js — texto, imagem, STT e TTS com Gemini
+// server.js — texto, imagem, chat com histórico, STT e TTS com Gemini
 
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import multer from 'multer';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { genai } from './gemini-client.js';
 
 const app = express();
-app.use(cors());
+
+// CORS (em produção, fixe origin)
+app.use(cors({ origin: process.env.WEB_ORIGIN || '*', methods: ['POST', 'OPTIONS'] }));
+
+// Rate limit básico
+const limiter = rateLimit({ windowMs: 60_000, max: 60 });
+app.use(limiter);
+
 app.use(express.json({ limit: '10mb' }));
 
 // ===== Uploads =====
@@ -69,7 +77,6 @@ app.post('/chat', async (req, res) => {
     const replyText = resp.response.text();
     return res.json({ reply: replyText });
   } catch (err) {
-    console.error('Erro /chat:', err);
     return res.status(500).json({ error: String(err?.message || err) });
   }
 });
@@ -102,12 +109,39 @@ app.post('/chat-image', uploadImage.single('image'), async (req, res) => {
     const replyText = resp.response.text();
     return res.json({ reply: replyText });
   } catch (err) {
-    console.error('Erro /chat-image:', err);
     return res.status(500).json({ error: String(err?.message || err) });
   }
 });
 
-// ---------- ROTA: STT (Speech-to-Text) ----------
+// ---------- ROTA: chat com histórico ----------
+app.post('/chat-converse', async (req, res) => {
+  try {
+    const { messages, system } = req.body || {};
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: 'messages[] é obrigatório' });
+    }
+
+    const model = genai.getGenerativeModel({
+      model: 'gemini-2.5-flash',
+      // Se sua versão do SDK não suportar, remova e injete via primeira mensagem.
+      systemInstruction: system || 'Você é um assistente sucinto e útil. Responda em pt-BR.',
+    });
+
+    const contents = messages.map(m => ({
+      role: m.role === 'model' ? 'model' : 'user',
+      parts: [{ text: String(m.content || '') }],
+    }));
+
+    const resp = await model.generateContent({ contents });
+    const reply = resp.response.text() || '';
+
+    return res.json({ reply });
+  } catch (err) {
+    return res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+// ---------- ROTA: STT ----------
 app.post('/stt', uploadAudio.single('audio'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'Campo "audio" é obrigatório' });
@@ -133,12 +167,11 @@ app.post('/stt', uploadAudio.single('audio'), async (req, res) => {
     const text = resp.response.text() || '';
     return res.json({ text });
   } catch (err) {
-    console.error('Erro /stt:', err);
     return res.status(500).json({ error: String(err?.message || err) });
   }
 });
 
-// ---------- ROTA: TTS (Text-to-Speech) ----------
+// ---------- ROTA: TTS ----------
 app.post('/tts', async (req, res) => {
   try {
     const { text, voiceName = 'Kore' } = req.body || {};
@@ -163,8 +196,8 @@ app.post('/tts', async (req, res) => {
     });
 
     if (!r.ok) {
-      const err = await r.text().catch(() => '');
-      return res.status(500).json({ error: `TTS HTTP ${r.status}: ${err}` });
+      const errText = await r.text().catch(() => '');
+      return res.status(500).json({ error: `TTS HTTP ${r.status}: ${errText}` });
     }
 
     const json = await r.json();
@@ -177,7 +210,6 @@ app.post('/tts', async (req, res) => {
 
     return res.json({ audioBase64, mimeType: 'audio/wav' });
   } catch (err) {
-    console.error('Erro /tts:', err);
     return res.status(500).json({ error: String(err?.message || err) });
   }
 });

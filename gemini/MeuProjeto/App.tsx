@@ -1,4 +1,4 @@
-// App.tsx (Expo / React Native) — STT + TTS com Gemini
+// App.tsx (Expo / React Native) — Chat + STT + TTS com Gemini
 
 import React, { useState, useEffect } from "react";
 import {
@@ -18,6 +18,8 @@ import * as ImagePicker from "expo-image-picker";
 import { Audio } from "expo-av";
 import axios from "axios";
 
+type ChatMessage = { id: string; role: "user" | "model"; content: string };
+
 // Ajuste este IP ao seu cenário local.
 const API_BASE =
   Platform.OS === "android"
@@ -34,6 +36,10 @@ export default function App() {
 
   const [loading, setLoading] = useState<boolean>(false);
   const [statusMsg, setStatusMsg] = useState<string>("");
+
+  // Chat com histórico
+  const [chat, setChat] = useState<ChatMessage[]>([]);
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -86,7 +92,6 @@ export default function App() {
       setReply(resp.data.reply || "");
       setStatusMsg("Resposta recebida com sucesso.");
     } catch (err: any) {
-      console.error("Erro chat:", err?.message || err);
       setStatusMsg("Erro ao enviar texto.");
       Alert.alert("Erro", err?.message || "Falha ao enviar texto.");
     } finally {
@@ -114,7 +119,6 @@ export default function App() {
       setReply(resp.data.reply || "");
       setStatusMsg("Resposta (imagem + texto) recebida.");
     } catch (err: any) {
-      console.error("Erro chat-image:", err?.message || err);
       setStatusMsg("Erro ao enviar imagem + texto.");
       Alert.alert("Erro", err?.message || "Falha ao enviar imagem + texto.");
     } finally {
@@ -128,8 +132,7 @@ export default function App() {
       const { sound } = await Audio.Sound.createAsync({ uri });
       setSoundObj(sound);
       await sound.playAsync();
-    } catch (e) {
-      console.error("Erro ao tocar áudio:", e);
+    } catch {
       Alert.alert("Erro", "Não foi possível reproduzir o áudio.");
     }
   }
@@ -159,7 +162,6 @@ export default function App() {
       setLoading(true);
       setStatusMsg("Enviando áudio...");
       const name = uri.split("/").pop() || "audio.m4a";
-      // Expo GRAVA .m4a no iOS e .3gp/.m4a no Android em alguns casos
       const type = Platform.OS === "ios" ? "audio/m4a" : "audio/3gpp";
 
       const form = new FormData();
@@ -206,6 +208,40 @@ export default function App() {
     }
   }
 
+  // ====== Chat com histórico (Gemini) ======
+  async function sendChatMessage() {
+    const txt = prompt.trim();
+    if (!txt || sending) return;
+
+    const userMsg: ChatMessage = { id: String(Date.now()), role: "user", content: txt };
+    setChat(prev => [...prev, userMsg]);
+    setPrompt("");
+    setSending(true);
+    setStatusMsg("Enviando ao Gemini...");
+
+    try {
+      const resp = await axios.post(
+        `${API_BASE}/chat-converse`,
+        {
+          system: "Você é um assistente sucinto e útil. Responda em pt-BR.",
+          messages: [...chat, userMsg].map(m => ({ role: m.role, content: m.content })),
+        },
+        { timeout: 45000 }
+      );
+
+      const replyText = String(resp.data?.reply || "");
+      const modelMsg: ChatMessage = { id: userMsg.id + "-r", role: "model", content: replyText };
+      setChat(prev => [...prev, modelMsg]);
+      setReply(replyText);
+      setStatusMsg("Resposta recebida.");
+    } catch (e: any) {
+      Alert.alert("Erro", e?.message || "Falha no chat");
+      setStatusMsg("Erro no chat.");
+    } finally {
+      setSending(false);
+    }
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>Chat com Gemini</Text>
@@ -216,37 +252,64 @@ export default function App() {
         value={prompt}
         onChangeText={setPrompt}
         multiline
-        editable={!loading}
+        editable={!loading && !sending}
       />
 
+      {/* Ações principais */}
       <View style={styles.buttonsRow}>
-        <Button title="Enviar Texto" onPress={sendText} disabled={loading} />
-        <Button title="Selecionar Imagem" onPress={pickImage} disabled={loading} />
+        <Button title="Enviar Texto" onPress={sendText} disabled={loading || sending} />
+        <Button title="Selecionar Imagem" onPress={pickImage} disabled={loading || sending} />
       </View>
 
       <View style={styles.singleButton}>
-        <Button title="Enviar Texto + Imagem" onPress={sendImageText} disabled={loading} />
+        <Button title="Enviar Texto + Imagem" onPress={sendImageText} disabled={loading || sending} />
       </View>
 
+      {/* STT */}
       <View style={styles.buttonsRow}>
         <Button
           title={recording ? "Gravando..." : "Gravar Áudio"}
           onPress={recording ? undefined : startRecording}
-          disabled={loading || !!recording}
+          disabled={loading || sending || !!recording}
         />
         <Button
           title="Parar & Transcrever"
           onPress={stopRecordingAndTranscribe}
-          disabled={loading || !recording}
+          disabled={loading || sending || !recording}
         />
       </View>
 
+      {/* TTS */}
       <View style={styles.singleButton}>
-        <Button
-          title="Texto ➜ Falar (TTS)"
-          onPress={sendTTS}
-          disabled={loading || !prompt.trim()}
-        />
+        <Button title="Texto ➜ Falar (TTS)" onPress={sendTTS} disabled={loading || sending || !prompt.trim()} />
+      </View>
+
+      {/* Chat com histórico */}
+      <View style={styles.singleButton}>
+        <Button title="Enviar (Chat)" onPress={sendChatMessage} disabled={loading || sending || !prompt.trim()} />
+      </View>
+
+      <View style={{ width: "100%", marginTop: 12 }}>
+        {chat.map(m => (
+          <View
+            key={m.id}
+            style={{
+              alignSelf: m.role === "user" ? "flex-end" : "flex-start",
+              backgroundColor: m.role === "user" ? "#DCF8C6" : "#FFFFFF",
+              padding: 10,
+              borderRadius: 10,
+              marginVertical: 4,
+              maxWidth: "85%",
+              borderWidth: 1,
+              borderColor: "#eee",
+            }}
+          >
+            <Text style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>
+              {m.role === "user" ? "Você" : "Gemini"}
+            </Text>
+            <Text style={{ fontSize: 14, color: "#222" }}>{m.content}</Text>
+          </View>
+        ))}
       </View>
 
       {loading && (
