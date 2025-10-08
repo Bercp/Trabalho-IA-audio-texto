@@ -20,7 +20,6 @@ import axios from "axios";
 
 type ChatMessage = { id: string; role: "user" | "model"; content: string };
 
-// Ajuste este IP ao seu cenário local.
 const API_BASE =
   Platform.OS === "android"
     ? "http://192.168.64.133:3001"
@@ -37,7 +36,6 @@ export default function App() {
   const [loading, setLoading] = useState<boolean>(false);
   const [statusMsg, setStatusMsg] = useState<string>("");
 
-  // Chat com histórico
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [sending, setSending] = useState(false);
 
@@ -56,7 +54,6 @@ export default function App() {
     return () => {
       if (soundObj) soundObj.unloadAsync().catch(() => {});
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function pickImage() {
@@ -126,18 +123,6 @@ export default function App() {
     }
   }
 
-  async function playAudioBase64(base64Str: string) {
-    try {
-      const uri = `data:audio/mp3;base64,${base64Str}`;
-      const { sound } = await Audio.Sound.createAsync({ uri });
-      setSoundObj(sound);
-      await sound.playAsync();
-    } catch {
-      Alert.alert("Erro", "Não foi possível reproduzir o áudio.");
-    }
-  }
-
-  // ====== STT ======
   async function startRecording() {
     try {
       await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
@@ -180,7 +165,6 @@ export default function App() {
     }
   }
 
-  // ====== TTS ======
   async function sendTTS() {
     if (!prompt.trim()) {
       Alert.alert("Validação", "Digite um texto antes de sintetizar.");
@@ -208,7 +192,6 @@ export default function App() {
     }
   }
 
-  // ====== Chat com histórico (Gemini) ======
   async function sendChatMessage() {
     const txt = prompt.trim();
     if (!txt || sending) return;
@@ -255,7 +238,6 @@ export default function App() {
         editable={!loading && !sending}
       />
 
-      {/* Ações principais */}
       <View style={styles.buttonsRow}>
         <Button title="Enviar Texto" onPress={sendText} disabled={loading || sending} />
         <Button title="Selecionar Imagem" onPress={pickImage} disabled={loading || sending} />
@@ -265,7 +247,6 @@ export default function App() {
         <Button title="Enviar Texto + Imagem" onPress={sendImageText} disabled={loading || sending} />
       </View>
 
-      {/* STT */}
       <View style={styles.buttonsRow}>
         <Button
           title={recording ? "Gravando..." : "Gravar Áudio"}
@@ -279,12 +260,10 @@ export default function App() {
         />
       </View>
 
-      {/* TTS */}
       <View style={styles.singleButton}>
         <Button title="Texto ➜ Falar (TTS)" onPress={sendTTS} disabled={loading || sending || !prompt.trim()} />
       </View>
 
-      {/* Chat com histórico */}
       <View style={styles.singleButton}>
         <Button title="Enviar (Chat)" onPress={sendChatMessage} disabled={loading || sending || !prompt.trim()} />
       </View>

@@ -1,5 +1,3 @@
-// gemini-client.js
-
 import 'dotenv/config';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { GoogleAIFileManager } from '@google/generative-ai/server';
