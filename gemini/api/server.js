@@ -1,4 +1,4 @@
-// server.js — texto, imagem, chat com histórico, STT, TTS e alias /api/claude/chat
+// server.js — texto puro (sem Markdown), imagem, chat com histórico, STT, TTS e alias /api/claude/chat
 
 import 'dotenv/config';
 import express from 'express';
@@ -12,12 +12,26 @@ import { genai } from './gemini-client.js';
 const app = express();
 
 // CORS (ajuste origin em produção)
-app.use(cors({ origin: process.env.WEB_ORIGIN || '*', methods: ['POST', 'OPTIONS'] }));
+app.use(cors({ origin: process.env.WEB_ORIGIN || '*', methods: ['POST', 'OPTIONS', 'GET'] }));
 
 // Rate limit básico
 app.use(rateLimit({ windowMs: 60_000, max: 60 }));
 
 app.use(express.json({ limit: '10mb' }));
+
+// ===== util: remover Markdown =====
+function mdToPlain(s = '') {
+  return String(s)
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/!\[[^\]]*]\([^)]*\)/g, '')
+    .replace(/\[([^\]]+)]\([^)]*\)/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/[*_~]{1,3}([^*_~]+)[*_~]{1,3}/g, '$1')
+    .replace(/^\s*[-*+]\s+/gm, '• ')
+    .replace(/^>\s?/gm, '')
+    .trim();
+}
 
 // ===== Uploads =====
 const uploadImage = multer({
@@ -62,7 +76,10 @@ function pcm16ToWav(pcmBuf, { sampleRate = 24000, channels = 1 } = {}) {
   return Buffer.concat([wavHeader, pcmBuf]);
 }
 
-// ---------- ROTA: texto ----------
+// ---------- Healthcheck ----------
+app.get('/health', (_req, res) => res.json({ ok: true }));
+
+// ---------- ROTA: texto (plain) ----------
 app.post('/chat', async (req, res) => {
   try {
     const { prompt } = req.body;
@@ -71,16 +88,23 @@ app.post('/chat', async (req, res) => {
     }
     const model = genai.getGenerativeModel({ model: 'gemini-2.5-flash' });
     const resp = await model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      contents: [{
+        role: 'user',
+        parts: [
+          { text: 'Responda em texto puro, sem Markdown.' },
+          { text: String(prompt) }
+        ]
+      }],
+      generationConfig: { responseMimeType: 'text/plain' }
     });
-    const replyText = resp.response.text();
+    const replyText = mdToPlain(resp.response.text() || '');
     return res.json({ reply: replyText });
   } catch (err) {
     return res.status(500).json({ error: String(err?.message || err) });
   }
 });
 
-// ---------- ROTA: imagem + texto ----------
+// ---------- ROTA: imagem + texto (plain) ----------
 app.post('/chat-image', uploadImage.single('image'), async (req, res) => {
   try {
     const { prompt } = req.body;
@@ -93,26 +117,28 @@ app.post('/chat-image', uploadImage.single('image'), async (req, res) => {
     const mimeType = req.file.mimetype;
     await fs.unlink(imgPath).catch(() => {});
 
-    const contents = [
-      {
-        role: 'user',
-        parts: [
-          { inlineData: { mimeType, data: imgBuf.toString('base64') } },
-          { text: prompt || '' },
-        ],
-      },
-    ];
+    const contents = [{
+      role: 'user',
+      parts: [
+        { inlineData: { mimeType, data: imgBuf.toString('base64') } },
+        { text: 'Responda em texto puro, sem Markdown.' },
+        { text: prompt || '' },
+      ],
+    }];
 
     const model = genai.getGenerativeModel({ model: 'gemini-2.5-flash' });
-    const resp = await model.generateContent({ contents });
-    const replyText = resp.response.text();
+    const resp = await model.generateContent({
+      contents,
+      generationConfig: { responseMimeType: 'text/plain' }
+    });
+    const replyText = mdToPlain(resp.response.text() || '');
     return res.json({ reply: replyText });
   } catch (err) {
     return res.status(500).json({ error: String(err?.message || err) });
   }
 });
 
-// ---------- ROTA: chat com histórico ----------
+// ---------- ROTA: chat com histórico (plain) ----------
 app.post('/chat-converse', async (req, res) => {
   try {
     const { messages, system } = req.body || {};
@@ -122,7 +148,7 @@ app.post('/chat-converse', async (req, res) => {
 
     const model = genai.getGenerativeModel({
       model: 'gemini-2.5-flash',
-      systemInstruction: system || 'Você é um assistente sucinto e útil. Responda em pt-BR.',
+      systemInstruction: (system ? system + ' ' : '') + 'Responda em texto puro, sem Markdown.',
     });
 
     const contents = messages.map(m => ({
@@ -130,8 +156,11 @@ app.post('/chat-converse', async (req, res) => {
       parts: [{ text: String(m.content || '') }],
     }));
 
-    const resp = await model.generateContent({ contents });
-    const reply = resp.response.text() || '';
+    const resp = await model.generateContent({
+      contents,
+      generationConfig: { responseMimeType: 'text/plain' }
+    });
+    const reply = mdToPlain(resp.response.text() || '');
 
     return res.json({ reply });
   } catch (err) {
@@ -139,7 +168,7 @@ app.post('/chat-converse', async (req, res) => {
   }
 });
 
-// ---------- ROTA: alias compatível com critério de avaliação ----------
+// ---------- ROTA: alias compatível /api/claude/chat (plain) ----------
 app.post('/api/claude/chat', async (req, res) => {
   try {
     const { messages, system } = req.body || {};
@@ -148,14 +177,18 @@ app.post('/api/claude/chat', async (req, res) => {
     }
     const model = genai.getGenerativeModel({
       model: 'gemini-2.5-flash',
-      systemInstruction: system || 'Você é um assistente sucinto e útil. Responda em pt-BR.',
+      systemInstruction: (system ? system + ' ' : '') + 'Responda em texto puro, sem Markdown.',
     });
     const contents = messages.map(m => ({
       role: m.role === 'model' ? 'model' : 'user',
       parts: [{ text: String(m.content || '') }],
     }));
-    const resp = await model.generateContent({ contents });
-    return res.json({ reply: resp.response.text() || '' });
+    const resp = await model.generateContent({
+      contents,
+      generationConfig: { responseMimeType: 'text/plain' }
+    });
+    const replyText = mdToPlain(resp.response.text() || '');
+    return res.json({ reply: replyText });
   } catch (e) {
     return res.status(500).json({ error: String(e?.message || e) });
   }
@@ -181,10 +214,11 @@ app.post('/stt', uploadAudio.single('audio'), async (req, res) => {
           { inlineData: { mimeType, data: audioBuf.toString('base64') } },
           { text: prompt }
         ]
-      }]
+      }],
+      generationConfig: { responseMimeType: 'text/plain' }
     });
 
-    const text = resp.response.text() || '';
+    const text = mdToPlain(resp.response.text() || '');
     return res.json({ text });
   } catch (err) {
     return res.status(500).json({ error: String(err?.message || err) });
@@ -235,6 +269,6 @@ app.post('/tts', async (req, res) => {
 });
 
 const port = process.env.PORT || 3001;
-app.listen(port, () => {
-  console.log(`Backend rodando em http://localhost:${port}`);
+app.listen(port, '0.0.0.0', () => {
+  console.log(`Backend ouvindo em 0.0.0.0:${port}`);
 });
